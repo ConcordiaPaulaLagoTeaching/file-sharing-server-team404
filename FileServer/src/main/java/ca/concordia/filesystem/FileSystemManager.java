@@ -4,6 +4,7 @@ import java.io.RandomAccessFile;
 import java.util.concurrent.locks.ReentrantLock;
 
 import ca.concordia.filesystem.datastructures.FEntry;
+import ca.concordia.filesystem.datastructures.FNode;
 
 public class FileSystemManager {
 
@@ -16,6 +17,7 @@ public class FileSystemManager {
     private static final int BLOCK_SIZE = 128; // Example block size
 
     private FEntry[] inodeTable; // Array of inodes
+    private FNode[] fnodes; // Array of fnodes
     private boolean[] freeBlockList; // Bitmap for free blocks
 
     public FileSystemManager(String filename, int totalSize) {
@@ -26,7 +28,9 @@ public class FileSystemManager {
             try {
                 this.disk = new RandomAccessFile(filename, "rw");
                 inodeTable = new FEntry[MAXFILES];
+                fnodes = new FNode[MAXBLOCKS];
                 freeBlockList = new boolean[MAXBLOCKS];
+                freeBlockList[0] = true; // metadata lives here (reserved area)
             } catch (Exception e) {
                 throw new RuntimeException("Unable to open disk file");
             }
@@ -36,6 +40,24 @@ public class FileSystemManager {
         }
 
     }
+
+    public void writeMetadata() throws Exception {
+        disk.seek(0);
+        for(int i = 0; i < inodeTable.length; i++){
+            if(inodeTable[i] != null){
+                disk.writeBytes(inodeTable[i].getFilename());
+                disk.write(inodeTable[i].getFilesize());
+                disk.write(inodeTable[i].getFirstBlock());
+            }
+        }
+
+        for(int i = 0; i < fnodes.length; i++){
+            if(fnodes[i] != null){
+                disk.write(fnodes[i].getBlockIndex());
+            }
+        }
+    }
+    
 
     //CREATE FILE
     public void createFile(String fileName) throws Exception {

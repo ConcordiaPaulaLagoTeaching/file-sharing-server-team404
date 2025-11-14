@@ -63,6 +63,7 @@ public class FileServer {
                                         writer.println("ERROR: Unknown command.");
                                         break;
                                 }
+                                fsManager.writeMetadata();
                             } catch (Exception e) {
                                 // Catch any error thrown by FileSystemManager and send it back
                                 e.printStackTrace();
