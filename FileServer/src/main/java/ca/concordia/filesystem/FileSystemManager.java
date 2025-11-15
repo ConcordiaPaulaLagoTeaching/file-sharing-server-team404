@@ -61,16 +61,16 @@ public class FileSystemManager {
 
     //CREATE FILE
     public void createFile(String fileName) throws Exception {
+        globalLock.lock();
         try{
 
-            //Check if file name exists
-            for (int i=0; i<inodeTable.length; i++){
-                FEntry entry = inodeTable[i];
-                if (entry != null && entry.getFilename().equals(fileName)){
-                    throw new Exception("FileName already exists. Try again.");
-                    // return; //Stops here, to prevent duplicates of the existing file
-                }
+            // Check if the file exists
+            try {
+                FEntry exists = checkFile(fileName);
+                throw new Exception("Filename already exists. Try again.");
+            } catch (Exception e) {
             }
+
 
             //Check the first available fentry
             int availableSpace = -1;
@@ -83,7 +83,6 @@ public class FileSystemManager {
 
             if (availableSpace ==-1){
                 throw new Exception("No free file entries available.");
-                // return;
             }
 
             // Check if free/occupied nodes
@@ -101,14 +100,12 @@ public class FileSystemManager {
             FEntry newFile = new FEntry (fileName, (short)0, freeBlock);
             inodeTable[availableSpace] = newFile; //Store the new file
 
-        }catch(IllegalArgumentException e){
-            throw new Exception (e.getMessage());
+        } finally {
+            globalLock.unlock();
         }
-
     }
 
-    // TODO: Add readFile, writeFile and other required methods,
-
+    //WRITE FILE
     public void writeFile(String fileName, byte[] contents) throws Exception {
         globalLock.lock();
         try {
@@ -139,7 +136,6 @@ public class FileSystemManager {
 
             // Update metadata
             target.setFilesize((short) bytesToWrite);
-
             System.out.println("File " + fileName + " written successfully (" + bytesToWrite + " bytes).");
 
         } catch (Exception e) {
@@ -149,6 +145,7 @@ public class FileSystemManager {
         }
     }
 
+    //READ FILE
     public byte[] readFile(String fileName) throws Exception {
         globalLock.lock();
         try {
@@ -176,7 +173,55 @@ public class FileSystemManager {
         }
     }
 
+    //LIST ALL FILES
+    public String[] listFiles() {
+        int fileCount = 0;
+        for (int i=0; i< inodeTable.length; i++){
+            FEntry entry = inodeTable[i];
+            if(entry != null){
+                fileCount ++;
+            }
+        }
+        String[] filesAvailable = new String[fileCount];
+        int index=0;
 
+        for (int i=0; i< inodeTable.length; i++){
+            FEntry entry = inodeTable[i];
+            if(entry != null){
+                filesAvailable[index] = entry.getFilename();
+                index++;
+            }
+        }
+        return filesAvailable;
+    }
+
+    //DELETE FILES
+    public void deleteFile(String fileName) throws Exception{
+        globalLock.lock();
+        try {
+            //Check if file name exists
+            FEntry target = checkFile(fileName);
+
+            short block = target.getFirstBlock();
+            if (block >= 0 && block < freeBlockList.length){
+                freeBlockList[block] = false;
+            }
+
+            for(int i=0; i< inodeTable.length; i++){
+                if(inodeTable[i] == target){
+                    inodeTable[i] = null;
+                    break;
+                }
+            }
+
+        } catch (Exception e) {
+            throw new Exception ("ERROR: " + e.getMessage());
+        } finally {
+            globalLock.unlock();
+        }
+    }
+
+    //CHECK FILE
     public FEntry checkFile(String fileName) throws Exception {
         boolean fileExist = false;
         FEntry target = null;
@@ -195,5 +240,68 @@ public class FileSystemManager {
         }
 
         return target;
-    }
+    }   
+
+        //SAVE FILE DATA (saves file data so it is available after restarting server)
+    // private void saveFileData() throws Exception{
+    //     globalLock.lock();
+    //     try {
+    //         try(DataOutputStream out = new DataOutputStream (new FileOutputStream("inodeTable.temp"))){
+    //             for (int i=0; i < inodeTable.length; i++){
+    //                 FEntry slot = inodeTable[i];
+    //                 if ( slot == null){
+    //                     out.writeBoolean(false);
+    //                 }else{
+    //                     out.writeBoolean(true);
+    //                     out.writeUTF(slot.getFilename());
+    //                     out.writeShort(slot.getFilesize());
+    //                     out.writeShort(slot.getFirstBlock());
+    //                 }
+    //             }
+    //         }
+
+    //         try (DataOutputStream out = new DataOutputStream(new FileOutputStream("freeBlocks.temp"))){
+    //             for(int i=0; i< freeBlockList.length; i++) {
+    //                 out.writeBoolean(freeBlockList[i]);
+    //             }
+    //         }
+
+    //     } finally {
+    //         globalLock.unlock();
+    //     }
+    // }
+    
+    // // LOAD FILE DATA (loads file data after restarting server)
+    // private void loadFileData() throws Exception{
+    //     globalLock.lock();
+    //     try {
+    //         try(DataInputStream in = new DataInputStream(new FileInputStream("inodeTable.temp"))){
+    //             for(int i=0; i<inodeTable.length; i++){
+    //                 boolean exists = in.readBoolean();
+    //                 if(!exists){
+    //                     inodeTable[i] = null;
+    //                 }else{
+    //                     String name = in.readUTF();
+    //                     short size = in.readShort();
+    //                     short block = in.readShort();
+    //                     inodeTable[i] = new FEntry(name, size, block);
+    //                 }
+    //             }
+    //         }catch (FileNotFoundException e){
+    //         }
+
+    //         try (DataInputStream in = new DataInputStream(new FileInputStream("freeBlocks.temp"))){
+    //                 for(int i=0; i < freeBlockList.length; i++){
+    //                     freeBlockList[i] = in.readBoolean();
+    //                 }
+    //         }catch(FileNotFoundException e){
+    //         }
+
+    //     } finally {
+    //         globalLock.unlock();
+    //     }
+        
+    // }
+
+
 }
