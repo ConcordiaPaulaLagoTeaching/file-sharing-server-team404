@@ -4,6 +4,7 @@ import java.io.RandomAccessFile;
 import java.util.concurrent.locks.ReentrantLock;
 
 import ca.concordia.filesystem.datastructures.FEntry;
+import ca.concordia.filesystem.datastructures.FNode;
 
 public class FileSystemManager {
 
@@ -16,6 +17,7 @@ public class FileSystemManager {
     private static final int BLOCK_SIZE = 128; // Example block size
 
     private FEntry[] inodeTable; // Array of inodes
+    private FNode[] fnodes; // Array of fnodes
     private boolean[] freeBlockList; // Bitmap for free blocks
 
     public FileSystemManager(String filename, int totalSize) {
@@ -26,8 +28,17 @@ public class FileSystemManager {
             try {
                 this.disk = new RandomAccessFile(filename, "rw");
                 inodeTable = new FEntry[MAXFILES];
+                fnodes = new FNode[MAXBLOCKS];
                 freeBlockList = new boolean[MAXBLOCKS];
+                freeBlockList[0] = true; // metadata lives here (reserved area)
 
+                if (disk.length() >= BLOCK_SIZE) {
+                    // Existing filesystem: load previous FEntry/FNode
+                    readMetada();
+                } else {
+                    // New filesystem: write empty metadata once
+                    writeMetadata();
+                }
             } catch (Exception e) {
                 throw new RuntimeException("Unable to open disk file");
             }
@@ -38,18 +49,156 @@ public class FileSystemManager {
 
     }
 
+    public void writeMetadata() throws Exception {
+        try {
+            disk.seek(0);
+
+            // Write all FEntry objects
+            for (int i = 0; i < inodeTable.length; i++) {
+                FEntry entry = inodeTable[i];
+
+                // Default values for an empty slot
+                String name;
+                short size;
+                short firstBlock;
+
+                if (entry == null) {
+                    name = "";
+                    size = 0;
+                    firstBlock = -1;
+                } else {
+                    name = entry.getFilename();
+                    size = entry.getFilesize();
+                    firstBlock = entry.getFirstBlock();
+                }
+
+                if (name == null) {
+                    name = "";
+                }
+
+                // 11-byte filename
+                byte[] nameBytes = name.getBytes();
+                for (int j = 0; j < 11; j++) {
+                    if (j < nameBytes.length) {
+                        disk.write(nameBytes[j]);
+                    } else {
+                        disk.write(0);
+                    }
+                }
+
+                // 2-byte filesize and 2-byte firstBlock
+                disk.writeShort(size);
+                disk.writeShort(firstBlock);
+            }
+
+            // Write all FNode objects
+            for (int i = 0; i < fnodes.length; i++) {
+                FNode node = fnodes[i];
+
+                short blockIndex;
+                short next;
+
+                if (node == null) {
+                    blockIndex = -1;
+                    next = -1;
+                } else {
+                    // make sure FNode has these getters, or add them
+                    blockIndex = (short) node.getBlockIndex();
+                    next = (short) node.getNextBlock();
+                }
+
+                // 2 bytes blockIndex + 2 bytes next
+                disk.writeShort(blockIndex);
+                disk.writeShort(next);
+            }
+
+            // Pad the rest of block 0
+            long pos = disk.getFilePointer();
+            while (pos < BLOCK_SIZE) {
+                disk.write(0);
+                pos++;
+            }
+        } catch (Exception e) {
+            throw e;
+        }
+    }
+
+    public void readMetada() throws Exception {
+        disk.seek(0);
+
+        // Read FEntries
+        for (int i = 0; i < inodeTable.length; i++) {
+            // 11 bytes for filename
+            byte[] nameBuffer = new byte[11];
+            disk.readFully(nameBuffer);
+
+            // Strip zeros
+            int realLen = 0;
+            while (realLen < 11 && nameBuffer[realLen] != 0) {
+                realLen++;
+            }
+            String name = new String(nameBuffer, 0, realLen);
+
+            // 2 bytes size, 2 bytes firstBlock
+            short size = disk.readShort();
+            short firstBlock = disk.readShort();
+
+            // Decide if this slot is used or empty
+            if (name.isEmpty() && size == 0 && firstBlock < 0) {
+                inodeTable[i] = null;
+            } else {
+                inodeTable[i] = new FEntry(name, size, firstBlock);
+            }
+        }
+
+        // Read FNodes
+        for (int i = 0; i < fnodes.length; i++) {
+            short blockIndex = disk.readShort();
+            short next       = disk.readShort();
+
+            if (blockIndex < 0) {
+                fnodes[i] = null;       // unused node
+            } else {
+                FNode node = new FNode(blockIndex);
+                node.setNextBlock(next);
+                fnodes[i] = node;
+            }
+        }
+
+        // Rebuild freeBlockList
+        for (int i = 0; i < freeBlockList.length; i++) {
+            freeBlockList[i] = false;
+        }
+
+        freeBlockList[0] = true;
+
+        // Mark blocks used by files
+        for (FEntry entry : inodeTable) {
+            if (entry != null) {
+                short fb = entry.getFirstBlock();
+                if (fb >= 0 && fb < freeBlockList.length) {
+                    freeBlockList[fb] = true;
+                }
+            }
+        }
+    }
+
+
     //CREATE FILE
     public void createFile(String fileName) throws Exception {
         globalLock.lock();
         try{
 
             // Check if the file exists
+            FEntry exists = null;
             try {
-                FEntry exists = checkFile(fileName);
-                throw new Exception("Filename already exists. Try again.");
+                exists = checkFile(fileName);
             } catch (Exception e) {
             }
 
+            if (exists != null) {
+                throw new Exception("Filename already exists. Try again.");
+            }
 
             //Check the first available fentry
             int availableSpace = -1;
@@ -78,7 +227,7 @@ public class FileSystemManager {
             //Create the file
             FEntry newFile = new FEntry (fileName, (short)0, freeBlock);
             inodeTable[availableSpace] = newFile; //Store the new file
-
+            writeMetadata();
         } finally {
             globalLock.unlock();
         }
@@ -115,6 +264,7 @@ public class FileSystemManager {
 
             // Update metadata
             target.setFilesize((short) bytesToWrite);
+            writeMetadata();
             System.out.println("File " + fileName + " written successfully (" + bytesToWrite + " bytes).");
 
         } catch (Exception e) {
@@ -183,15 +333,33 @@ public class FileSystemManager {
 
             short block = target.getFirstBlock();
             if (block >= 0 && block < freeBlockList.length){
+
+                // Clearing block
+                long offset = (long) block * BLOCK_SIZE;
+                disk.seek(offset);
+
+                // Write zeros over the whole block
+                byte[] zeros = new byte[BLOCK_SIZE];
+                disk.write(zeros);
+
                 freeBlockList[block] = false;
             }
 
+            // Clearing FNode
+            for (int i = 0; i < fnodes.length; i++) {
+                FNode node = fnodes[i];
+                if (node != null && node.getBlockIndex() == block) {
+                    fnodes[i] = null;
+                }
+            }    
+            
             for(int i=0; i< inodeTable.length; i++){
                 if(inodeTable[i] == target){
                     inodeTable[i] = null;
                     break;
                 }
-            }
+            }   
+            writeMetadata();
 
         } catch (Exception e) {
             throw new Exception ("ERROR: " + e.getMessage());
@@ -219,68 +387,5 @@ public class FileSystemManager {
         }
 
         return target;
-    }   
-
-        //SAVE FILE DATA (saves file data so it is available after restarting server)
-    // private void saveFileData() throws Exception{
-    //     globalLock.lock();
-    //     try {
-    //         try(DataOutputStream out = new DataOutputStream (new FileOutputStream("inodeTable.temp"))){
-    //             for (int i=0; i < inodeTable.length; i++){
-    //                 FEntry slot = inodeTable[i];
-    //                 if ( slot == null){
-    //                     out.writeBoolean(false);
-    //                 }else{
-    //                     out.writeBoolean(true);
-    //                     out.writeUTF(slot.getFilename());
-    //                     out.writeShort(slot.getFilesize());
-    //                     out.writeShort(slot.getFirstBlock());
-    //                 }
-    //             }
-    //         }
-
-    //         try (DataOutputStream out = new DataOutputStream(new FileOutputStream("freeBlocks.temp"))){
-    //             for(int i=0; i< freeBlockList.length; i++) {
-    //                 out.writeBoolean(freeBlockList[i]);
-    //             }
-    //         }
-
-    //     } finally {
-    //         globalLock.unlock();
-    //     }
-    // }
-    
-    // // LOAD FILE DATA (loads file data after restarting server)
-    // private void loadFileData() throws Exception{
-    //     globalLock.lock();
-    //     try {
-    //         try(DataInputStream in = new DataInputStream(new FileInputStream("inodeTable.temp"))){
-    //             for(int i=0; i<inodeTable.length; i++){
-    //                 boolean exists = in.readBoolean();
-    //                 if(!exists){
-    //                     inodeTable[i] = null;
-    //                 }else{
-    //                     String name = in.readUTF();
-    //                     short size = in.readShort();
-    //                     short block = in.readShort();
-    //                     inodeTable[i] = new FEntry(name, size, block);
-    //                 }
-    //             }
-    //         }catch (FileNotFoundException e){
-    //         }
-
-    //         try (DataInputStream in = new DataInputStream(new FileInputStream("freeBlocks.temp"))){
-    //                 for(int i=0; i < freeBlockList.length; i++){
-    //                     freeBlockList[i] = in.readBoolean();
-    //                 }
-    //         }catch(FileNotFoundException e){
-    //         }
-
-    //     } finally {
-    //         globalLock.unlock();
-    //     }
-        
-    // }
-
-
+    }
 }
