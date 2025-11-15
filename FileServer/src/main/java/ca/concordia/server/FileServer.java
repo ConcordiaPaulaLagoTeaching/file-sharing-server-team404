@@ -13,9 +13,10 @@ public class FileServer {
     private int port;
     public FileServer(int port, String fileSystemName, int totalSize){
         // Initialize the FileSystemManager
-        FileSystemManager fsManager = new FileSystemManager(fileSystemName,
-                10*128 );
-        this.fsManager = fsManager;
+        // FileSystemManager fsManager = new FileSystemManager(fileSystemName,
+        //         10*128 );
+        this.fsManager = new FileSystemManager(fileSystemName, 10*128 );
+        // this.fsManager = fsManager;
         this.port = port;
     }
 
@@ -54,6 +55,21 @@ public class FileServer {
                                         byte[] content = fsManager.readFile(parts[1]);
                                         writer.println("CONTENT: " + new String(content) + " (" + content.length + " bytes)");
                                     break;
+                                    
+                                    case "LIST":
+                                        // writer.println("Checking for available files...");
+                                        String [] filesAvailable = fsManager.listFiles();
+                                        if (filesAvailable == null || filesAvailable.length == 0){
+                                             writer.println("No files found.");
+                                        }else{
+                                            writer.println("Current files available: " + String.join(", ",filesAvailable));
+                                        }
+                                    break;
+
+                                    case "DELETE":
+                                        fsManager.deleteFile(parts[1]);
+                                        writer.println("SUCCESS: File " + parts[1]+ " deleted");
+                                        break;
 
                                     case "QUIT":
                                         writer.println("SUCCESS: Disconnecting.");
