@@ -175,9 +175,15 @@ public class FileSystemManager {
         // Mark blocks used by files
         for (FEntry entry : inodeTable) {
             if (entry != null) {
-                short fb = entry.getFirstBlock();
-                if (fb >= 0 && fb < freeBlockList.length) {
-                    freeBlockList[fb] = true;
+                int current = entry.getFirstBlock();
+                while (current >= 0 && current < freeBlockList.length && !freeBlockList[current]) {
+                    freeBlockList[current] = true;
+
+                    FNode node = fnodes[current];
+                    if (node == null) break;
+                    int next = node.getNextBlock();
+                    if (next == current) break;
+                    current = next;
                 }
             }
         }
@@ -244,6 +250,9 @@ public class FileSystemManager {
             int bytesToWrite = contents.length;
             int blocksNeeded = (int) Math.ceil((double) bytesToWrite / BLOCK_SIZE);
 
+            // Find freeblocks to write to
+            java.util.List<Integer> chosenBlocks = new java.util.ArrayList<>(); 
+
             // Make sure we have enough free blocks
             int freeCount = 0;
             for (boolean used : freeBlockList){
@@ -254,13 +263,86 @@ public class FileSystemManager {
                 throw new Exception("ERROR: file too large.");
             }
 
-            // Get the first free block
-            short firstBlock = target.getFirstBlock();
-            long offset = firstBlock * BLOCK_SIZE;
-            disk.seek(offset);
+            // Free old blocks used by this file
+            short oldFirstBlock = target.getFirstBlock();
+            int oldCurrent = oldFirstBlock;
 
-            // Write the bytes to the disk file
-            disk.write(contents);
+            while (oldCurrent >= 0 && oldCurrent < freeBlockList.length) {
+                FNode oldNode = fnodes[oldCurrent];
+                int oldNext = -1;
+
+                if (oldNode != null) {
+                    oldNext = oldNode.getNextBlock();
+                }
+
+                // Clear old block data
+                long oldOffset = (long) oldCurrent * BLOCK_SIZE;
+                disk.seek(oldOffset);
+                byte[] zeros = new byte[BLOCK_SIZE];
+                disk.write(zeros);
+
+                // Mark free
+                freeBlockList[oldCurrent] = false;
+
+                // Remove node
+                fnodes[oldCurrent] = null;
+
+                // Move through chain
+                oldCurrent = oldNext;
+            }
+
+
+            for (int i = 1; i < freeBlockList.length && chosenBlocks.size() < blocksNeeded; i++) {
+                if (!freeBlockList[i]) {
+                    chosenBlocks.add(i);
+                }
+            }  
+
+            // Mark blocks as used and set up FNode
+            for (int i = 0; i < chosenBlocks.size(); i++) {
+                int blockIndex = chosenBlocks.get(i);
+
+                // mark as used
+                freeBlockList[blockIndex] = true;
+
+                // create or reuse FNode
+                FNode node = fnodes[blockIndex];
+                if (node == null) {
+                    node = new FNode(blockIndex);
+                    fnodes[blockIndex] = node;
+                }
+
+                // link to next block (or -1 if last)
+                if (i == chosenBlocks.size() - 1) {
+                    node.setNextBlock(-1);
+                } else {
+                    int nextBlockIndex = chosenBlocks.get(i + 1);
+                    node.setNextBlock(nextBlockIndex);
+                }
+            }
+
+            // Update FEntry metadata
+            short headBlock = chosenBlocks.get(0).shortValue();
+            target.setFirstBlock(headBlock);
+            target.setFilesize((short) bytesToWrite);
+
+            // Write data in all blocks
+            int remaining = bytesToWrite;
+            int contentOffset = 0;
+            int currentBlock = headBlock;
+
+            while (currentBlock != -1 && remaining > 0) {
+                long diskOffset = (long) currentBlock * BLOCK_SIZE;
+                disk.seek(diskOffset);
+
+                int bytesThisBlock = Math.min(remaining, BLOCK_SIZE);
+                disk.write(contents, contentOffset, bytesThisBlock);
+
+                contentOffset += bytesThisBlock;
+                remaining -= bytesThisBlock;
+
+                currentBlock = fnodes[currentBlock].getNextBlock();
+            }
 
             // Update metadata
             target.setFilesize((short) bytesToWrite);
@@ -285,13 +367,26 @@ public class FileSystemManager {
             int size = Short.toUnsignedInt(target.getFilesize());
             if (size == 0) return new byte[0];
 
-            long offset = (long) target.getFirstBlock() * BLOCK_SIZE;
-            if (offset < 0) throw new Exception("Invalid block offset.");
-
             // Reading bytes
             byte[] buf = new byte[size];
-            disk.seek(offset);
-            disk.readFully(buf, 0, size);
+            int remaining = size;
+            int bufOffset = 0;
+            int currentBlock = target.getFirstBlock();
+
+            while (currentBlock != -1 && remaining > 0) {
+                long diskOffset = (long) currentBlock * BLOCK_SIZE;
+                disk.seek(diskOffset);
+
+                int bytesThisBlock = Math.min(remaining, BLOCK_SIZE);
+                disk.readFully(buf, bufOffset, bytesThisBlock);
+
+                bufOffset += bytesThisBlock;
+                remaining -= bytesThisBlock;
+
+                FNode node = fnodes[currentBlock];
+                currentBlock = (node != null) ? node.getNextBlock() : -1;
+            }
+
 
             return buf;
 
@@ -331,27 +426,33 @@ public class FileSystemManager {
             //Check if file name exists
             FEntry target = checkFile(fileName);
 
-            short block = target.getFirstBlock();
-            if (block >= 0 && block < freeBlockList.length){
+            short firstBlock = target.getFirstBlock();
+            int current = firstBlock;
 
-                // Clearing block
-                long offset = (long) block * BLOCK_SIZE;
+            // Clear every block
+            while (current >= 0 && current < freeBlockList.length) {
+                // Save next before we kill this node
+                FNode node = fnodes[current];
+                int next = -1;
+                if (node != null) {
+                    next = node.getNextBlock();
+                }
+
+                // Clear block contents on disk
+                long offset = (long) current * BLOCK_SIZE;
                 disk.seek(offset);
-
-                // Write zeros over the whole block
                 byte[] zeros = new byte[BLOCK_SIZE];
                 disk.write(zeros);
 
-                freeBlockList[block] = false;
-            }
+                // Mark block free
+                freeBlockList[current] = false;
 
-            // Clearing FNode
-            for (int i = 0; i < fnodes.length; i++) {
-                FNode node = fnodes[i];
-                if (node != null && node.getBlockIndex() == block) {
-                    fnodes[i] = null;
-                }
-            }    
+                // Remove FNode
+                fnodes[current] = null;
+
+                // Move to next
+                current = next;
+            }
             
             for(int i=0; i< inodeTable.length; i++){
                 if(inodeTable[i] == target){
