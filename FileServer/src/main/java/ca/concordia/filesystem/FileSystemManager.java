@@ -2,6 +2,7 @@ package ca.concordia.filesystem;
 
 import java.io.RandomAccessFile;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.locks.ReentrantLock;
 
 import ca.concordia.filesystem.datastructures.FEntry;
 import ca.concordia.filesystem.datastructures.FNode;
@@ -12,7 +13,7 @@ public class FileSystemManager {
     private final int MAXBLOCKS = 10;
     private static FileSystemManager instance = null;
     private final RandomAccessFile disk;
-    // private final ReentrantLock globalLock = new ReentrantLock();
+    private final ReentrantLock globalLock = new ReentrantLock();
 
     // Readers–writers sync (replaces globallock)
     private final Semaphore mutex = new Semaphore(1);
@@ -246,6 +247,8 @@ public class FileSystemManager {
     //WRITE FILE
     public void writeFile(String fileName, byte[] contents) throws Exception {
         startWrite();
+        globalLock.lock();
+
         try {
             // Check if the file exists and finds first entry
             FEntry target = checkFile(fileName);
@@ -356,6 +359,7 @@ public class FileSystemManager {
         } catch (Exception e) {
             throw new Exception("Error writing file: " + e.getMessage());
         } finally {
+            globalLock.unlock();
             endWrite();
         }
     }
