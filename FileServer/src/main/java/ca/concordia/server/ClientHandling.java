@@ -87,6 +87,10 @@ public class ClientHandling implements Runnable{
         } catch (Exception e) {
             System.out.println("Completed..." + e.getMessage());
 
+        }finally{
+            try {
+                clientSocket.close();
+            } catch (Exception ignored) {}
         }
 
     }
