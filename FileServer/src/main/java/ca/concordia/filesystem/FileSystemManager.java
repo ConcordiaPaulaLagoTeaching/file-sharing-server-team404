@@ -387,7 +387,6 @@ public class FileSystemManager {
                 currentBlock = (node != null) ? node.getNextBlock() : -1;
             }
 
-
             return buf;
 
         } catch (Exception e) {
@@ -398,25 +397,32 @@ public class FileSystemManager {
     }
 
     //LIST ALL FILES
-    public String[] listFiles() {
-        int fileCount = 0;
-        for (int i=0; i< inodeTable.length; i++){
-            FEntry entry = inodeTable[i];
-            if(entry != null){
-                fileCount ++;
+    public String[] listFiles() throws Exception {
+        globalLock.lock();
+        try {
+            int fileCount = 0;
+            for (int i=0; i< inodeTable.length; i++){
+                FEntry entry = inodeTable[i];
+                if(entry != null){
+                    fileCount ++;
+                }
             }
-        }
-        String[] filesAvailable = new String[fileCount];
-        int index=0;
+            String[] filesAvailable = new String[fileCount];
+            int index=0;
 
-        for (int i=0; i< inodeTable.length; i++){
-            FEntry entry = inodeTable[i];
-            if(entry != null){
-                filesAvailable[index] = entry.getFilename();
-                index++;
+            for (int i=0; i< inodeTable.length; i++){
+                FEntry entry = inodeTable[i];
+                if(entry != null){
+                    filesAvailable[index] = entry.getFilename();
+                    index++;
+                }
             }
+            return filesAvailable;
+        } catch (Exception e) {
+            throw new Exception(e.getMessage());
+        } finally{
+            globalLock.unlock();
         }
-        return filesAvailable;
     }
 
     //DELETE FILES
