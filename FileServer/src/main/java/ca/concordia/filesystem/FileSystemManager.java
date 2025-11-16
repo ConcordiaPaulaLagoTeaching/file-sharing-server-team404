@@ -1,7 +1,7 @@
 package ca.concordia.filesystem;
 
 import java.io.RandomAccessFile;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.Semaphore;
 
 import ca.concordia.filesystem.datastructures.FEntry;
 import ca.concordia.filesystem.datastructures.FNode;
@@ -12,7 +12,12 @@ public class FileSystemManager {
     private final int MAXBLOCKS = 10;
     private static FileSystemManager instance = null;
     private final RandomAccessFile disk;
-    private final ReentrantLock globalLock = new ReentrantLock();
+    // private final ReentrantLock globalLock = new ReentrantLock();
+
+    // Readers–writers sync (replaces globallock)
+    private final Semaphore mutex = new Semaphore(1);
+    private final Semaphore wrt = new Semaphore(1);
+    private int readCount = 0;
 
     private static final int BLOCK_SIZE = 128; // Example block size
 
@@ -189,10 +194,9 @@ public class FileSystemManager {
         }
     }
 
-
     //CREATE FILE
     public void createFile(String fileName) throws Exception {
-        globalLock.lock();
+        startWrite();
         try{
 
             // Check if the file exists
@@ -235,13 +239,13 @@ public class FileSystemManager {
             inodeTable[availableSpace] = newFile; //Store the new file
             writeMetadata();
         } finally {
-            globalLock.unlock();
+            endWrite();
         }
     }
 
     //WRITE FILE
     public void writeFile(String fileName, byte[] contents) throws Exception {
-        globalLock.lock();
+        startWrite();
         try {
             // Check if the file exists and finds first entry
             FEntry target = checkFile(fileName);
@@ -352,13 +356,13 @@ public class FileSystemManager {
         } catch (Exception e) {
             throw new Exception("Error writing file: " + e.getMessage());
         } finally {
-            globalLock.unlock();
+            endWrite();
         }
     }
 
     //READ FILE
     public byte[] readFile(String fileName) throws Exception {
-        globalLock.lock();
+        startRead();
         try {
             // Check if the file exists and finds first entry
             FEntry target = checkFile(fileName);
@@ -392,13 +396,13 @@ public class FileSystemManager {
         } catch (Exception e) {
             throw new Exception(e.getMessage());
         } finally {
-            globalLock.unlock();
+            endRead();
         }
     }
 
     //LIST ALL FILES
     public String[] listFiles() throws Exception {
-        globalLock.lock();
+        startRead();
         try {
             int fileCount = 0;
             for (int i=0; i< inodeTable.length; i++){
@@ -421,13 +425,13 @@ public class FileSystemManager {
         } catch (Exception e) {
             throw new Exception(e.getMessage());
         } finally{
-            globalLock.unlock();
+            endRead();
         }
     }
 
     //DELETE FILES
     public void deleteFile(String fileName) throws Exception{
-        globalLock.lock();
+        startWrite();
         try {
             //Check if file name exists
             FEntry target = checkFile(fileName);
@@ -471,7 +475,7 @@ public class FileSystemManager {
         } catch (Exception e) {
             throw new Exception ("ERROR: " + e.getMessage());
         } finally {
-            globalLock.unlock();
+            endWrite();
         }
     }
 
@@ -494,5 +498,42 @@ public class FileSystemManager {
         }
 
         return target;
+    }
+
+    /* 
+        Reader-Writer Helpers 
+    */
+
+    // Reader
+    private void startRead() throws InterruptedException {
+        mutex.acquire();
+        readCount++;
+        if (readCount == 1) {
+            wrt.acquire();
+        }
+        mutex.release();
+    }
+
+    private void endRead() {
+        try {
+            mutex.acquire();
+            readCount--;
+            if (readCount == 0) {
+                wrt.release();
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } finally {
+            mutex.release();
+        }
+    }
+
+    // Writer
+    private void startWrite() throws InterruptedException {
+        wrt.acquire();
+    }
+
+    private void endWrite() {
+        wrt.release();
     }
 }

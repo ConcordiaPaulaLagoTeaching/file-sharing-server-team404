@@ -76,7 +76,7 @@ public class FileClientLoadTest {
         scanner.nextLine(); // consume leftover newline
 
         // Ask whether to use many files or a single file
-        System.out.print("Do you want the clients to edit to the same file? (y/n): ");
+        System.out.print("Do you want the clients to edit the same file? (y/n): ");
         String answer = scanner.nextLine().trim().toLowerCase();
         boolean manyFiles = answer.startsWith("n");
         System.out.println("################################################################");
